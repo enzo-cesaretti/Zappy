@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+
+import socket
+import argparse
+import sys
+import re
+import time
+
+DIRECTION = {
+    'N': (0, -1),
+    'E': (1, 0),
+    'S': (0, 1),
+    'W': (-1, 0)
+}
+
+class AIState:
+    def __init__(self):
+        self.position = (0, 0)
+        self.direction = 'N'
+        self.inventory = {}
+        self.connected = False
+
+    def update_position(self):
+        x, y = self.position
+        dx, dy = DIRECTION[self.direction]
+        self.position = (x + dx, y + dy)
+
+    def turn_right(self):
+        directions = list(DIRECTION.keys())
+        current_index = directions.index(self.direction)
+        new_index = (current_index + 1) % len(directions)
+        self.direction = directions[new_index]
+
+    def turn_left(self):
+        directions = list(DIRECTION.keys())
+        current_index = directions.index(self.direction)
+        new_index = (current_index - 1) % len(directions)
+        self.direction = directions[new_index]
+
+    def look_around(self, s):
+        s.sendall("Look\n".encode())
+        response = s.recv(1024).decode().strip()
+        match = re.match(r"\[ (.*) \]", response)
+        if match:
+            environment_raw = match.group(1)
+            environment = re.split(r',\s*|\s+', environment_raw)
+            environment = [item.rstrip(',') for item in environment if item.strip()]
+            print(f"Environment: {environment}")
+        else:
+            print("Failed to parse environment.")
+
+    def update_inventory(self, s):
+        s.sendall("Inventory\n".encode())
+        response = s.recv(1024).decode().strip()
+        inventory = {}
+        items = re.findall(r"(\w+) (\d+)", response)
+        for item in items:
+            name, quantity_str = item
+            quantity = int(quantity_str)
+            inventory[name] = quantity
+        self.inventory = inventory
+        print(f"Inventory updated: {self.inventory}")
+
+    def broadcast_text(self, s, text):
+        s.sendall(f"Broadcast {text}\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response == "ok":
+            print("Message broadcasted successfully.")
+        else:
+            print("Failed to broadcast message.")
+
+    def check_available_slots(self, s):
+        s.sendall("Connect_nbr\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response.isdigit():
+            print(f"Available slots: {response}")
+        else:
+            print("Failed to check available slots or bad response.")
+
+    def fork_player(self, s):
+        s.sendall("Fork\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response == "ok":
+            print("Fork successful.")
+        else:
+            print("Fork failed.")
+
+    def eject_player(self, s):
+        s.sendall("Eject\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response == "ok":
+            print("Player ejected.")
+        else:
+            print("Failed to eject player.")
+
+    def take_object(self, s, object_name):
+        s.sendall(f"Take {object_name}\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response == "ok":
+            print(f"Object {object_name} taken.")
+        else:
+            print(f"Failed to take object {object_name}.")
+
+    def set_object(self, s, object_name):
+        s.sendall(f"Set {object_name}\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response == "ok":
+            print(f"Object {object_name} set.")
+        else:
+            print(f"Failed to set object {object_name}.")
+
+    def incantation(self, s):
+        s.sendall("Incantation\n".encode())
+        response = s.recv(1024).decode().strip()
+        if response == "Elevation underway":
+            print("Incantation started.")
+        else:
+            print("Failed to start incantation.")
+
+    def __str__(self):
+        return f"Position: {self.position}, Direction: {self.direction}, Inventory: {self.inventory}"
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Connect to ZAPPY server.', add_help=False)
+    parser.add_argument('-p', '--port', type=int, required=True, help='Port number')
+    parser.add_argument('-n', '--name', type=str, required=True, help='Team name')
+    parser.add_argument('-h', '--host', type=str, default='localhost', help='Machine name (default: localhost)')
+    parser.add_argument('--help', action='help', help='Show this help message and exit')
+    return parser.parse_args()
+
+def connect_to_server(host, port, team_name):
+    ai_state = AIState()
+    s = None
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        print(f"Connecting to {host} on port {port}...")
+        
+        s.connect((host, port))
+        print("Connected to server")
+
+        welcome_msg = s.recv(1024).decode().strip()
+        print(f"Server: {welcome_msg}")
+
+        if welcome_msg == "WELCOME":
+            ai_state.connected = True
+
+        print(f"Sending team name: {team_name}")
+        s.sendall((team_name + '\n').encode())
+
+        while True:
+            server_msg = s.recv(1024).decode().strip()
+            if server_msg == "dead":
+                print("You are dead. Exiting...")
+                break
+            elif server_msg.startswith("message"):
+                print(f"Received message: {server_msg}")
+
+            command = input("Enter command: ").strip()
+            if command:
+                s.sendall((command + '\n').encode())
+                if command.lower() == "forward":
+                    ai_state.update_position()
+                elif command.lower() == "right":
+                    ai_state.turn_right()
+                elif command.lower() == "left":
+                    ai_state.turn_left()
+                elif command.lower() == "look":
+                    ai_state.look_around(s)
+                elif command.lower() == "inventory":
+                    ai_state.update_inventory(s)
+                elif command.lower().startswith("broadcast"):
+                    text = command[len("broadcast"):].strip()
+                    ai_state.broadcast_text(s, text)
+                elif command.lower() == "connect_nbr":
+                    ai_state.check_available_slots(s)
+                elif command.lower() == "fork":
+                    ai_state.fork_player(s)
+                elif command.lower() == "eject":
+                    ai_state.eject_player(s)
+                elif command.lower().startswith("take"):
+                    object_name = command[len("take"):].strip()
+                    ai_state.take_object(s, object_name)
+                elif command.lower().startswith("set"):
+                    object_name = command[len("set"):].strip()
+                    ai_state.set_object(s, object_name)
+                elif command.lower() == "incantation":
+                    ai_state.incantation(s)
+    except KeyboardInterrupt:
+        print("\nExiting AI ...")
+    except socket.error as e:
+        print(f"Socket error occurred: {e}")
+    finally:
+        if s:
+            s.close()
+            print("Connection closed.")
+
+if __name__ == "__main__":
+    args = parse_args()
+    connect_to_server(args.host, args.port, args.name)
